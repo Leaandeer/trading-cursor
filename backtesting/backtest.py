@@ -1,17 +1,18 @@
 import pandas as pd
 import yfinance as yf
 from typing import List, Dict
+from datetime import datetime, timedelta
 
 class Backtester:
     def __init__(self, initial_capital: float, risk_per_trade: float = 0.02):
         self.initial_capital = initial_capital
         self.capital = initial_capital
-        self.risk_per_trade = risk_per_trade  # 0.02 = 2% risk per trade
+        self.risk_per_trade = risk_per_trade
     
     def calculate_position_size(self, entry_price: float, stop_loss: float) -> int:
         """Calculate position size based on risk percentage and available capital"""
-        risk_amount = self.capital * self.risk_per_trade  # How much money we're willing to risk
-        risk_per_share = entry_price - stop_loss  # How much we risk per share
+        risk_amount = self.capital * self.risk_per_trade
+        risk_per_share = entry_price - stop_loss
         
         # Calculate position size based on risk
         position_size = int(risk_amount / risk_per_share)
@@ -38,27 +39,41 @@ class Backtester:
     def fetch_data(self, symbol: str, start_date: str, end_date: str) -> pd.DataFrame:
         """Fetch and prepare data with shorter-term indicators"""
         try:
-            df = yf.download(symbol, start=start_date, end=end_date)
+            # Fetch extra data to properly calculate indicators
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d') - timedelta(days=60)
+            
+            df = yf.download(symbol, start=start_dt, end=end_date)
             if df.empty:
                 print(f"No data found for {symbol}")
                 return None
                 
-            # Add shorter-term moving averages for more signals
+            # Use shorter MAs for shorter timeframes
+            df['MA_10'] = df['Close'].rolling(window=10).mean()
             df['MA_20'] = df['Close'].rolling(window=20).mean()
-            df['MA_50'] = df['Close'].rolling(window=50).mean()
             df['Price_Change'] = df['Close'].pct_change()
+            df['RSI'] = self.calculate_rsi(df['Close'], period=14)
             
-            return df
+            # Only return the requested date range
+            return df[start_date:]
+            
         except Exception as e:
             print(f"Error fetching data for {symbol}: {e}")
             return None
     
+    def calculate_rsi(self, prices: pd.Series, period: int = 14) -> pd.Series:
+        """Calculate RSI indicator"""
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+    
     def run_single_symbol(self, symbol: str, start_date: str, end_date: str) -> Dict:
-        """Run backtest with trailing stop loss and position sizing"""
+        """Run backtest with more frequent entry signals"""
         print(f"Testing {symbol}...")
         
         df = self.fetch_data(symbol, start_date, end_date)
-        if df is None:
+        if df is None or len(df) < 10:  # Require at least 10 days of data
             return {"symbol": symbol, "profit": 0, "trades": 0}
         
         position = None
@@ -68,45 +83,61 @@ class Backtester:
         trailing_stop = None
         highest_price = None
         
-        for i in range(50, len(df)):
+        # Start after 10 bars instead of 50
+        for i in range(10, len(df)):
             current_price = float(df['Close'].iloc[i])
             current_low = float(df['Low'].iloc[i])
             current_high = float(df['High'].iloc[i])
+            current_ma10 = float(df['MA_10'].iloc[i])
             current_ma20 = float(df['MA_20'].iloc[i])
-            current_ma50 = float(df['MA_50'].iloc[i])
             price_change = float(df['Price_Change'].iloc[i])
+            current_rsi = float(df['RSI'].iloc[i])
             
-            # Entry conditions
+            # Entry conditions - More suitable for shorter timeframes
             if position is None:
-                trend_up = current_price > current_ma50
-                pullback = abs(current_price - current_ma20) / current_price < 0.01
-                momentum_positive = price_change > -0.01
+                trend_condition = (
+                    current_price > current_ma10 or  # Price above 10 MA
+                    current_price > current_ma20     # OR price above 20 MA
+                )
                 
-                if trend_up and (pullback or momentum_positive):
+                pullback_condition = (
+                    abs(current_price - current_ma10) / current_price < 0.02 or  # Within 2% of 10 MA
+                    abs(current_price - current_ma20) / current_price < 0.03     # OR within 3% of 20 MA
+                )
+                
+                momentum_condition = (
+                    price_change > -0.02 or  # Allow more negative momentum
+                    current_rsi < 40         # OR oversold condition
+                )
+                
+                conditions_met = sum([trend_condition, pullback_condition, momentum_condition])
+                
+                if conditions_met >= 2:
                     position = current_price
-                    trailing_stop = position * 0.98  # Initial 2% stop loss
+                    trailing_stop = position * 0.98  # Keep 2% initial stop
                     
-                    # Calculate position size based on risk
                     position_size = self.calculate_position_size(position, trailing_stop)
                     
-                    highest_price = position
-                    trades += 1
-                    print(f"\nBuy {symbol}:")
-                    print(f"Price: ${position:.2f}")
-                    print(f"Position Size: {position_size} shares (${position_size * position:,.2f})")
-                    print(f"Initial Stop Loss: ${trailing_stop:.2f}")
-                    print(f"Risk per share: ${position - trailing_stop:.2f}")
-                    print(f"Total risk: ${(position - trailing_stop) * position_size:.2f} ({self.risk_per_trade*100:.1f}% of capital)")
+                    if position_size > 0:  # Only take trade if we can size properly
+                        highest_price = position
+                        trades += 1
+                        print(f"\nBuy {symbol}:")
+                        print(f"Price: ${position:.2f}")
+                        print(f"Position Size: {position_size} shares (${position_size * position:,.2f})")
+                        print(f"Initial Stop Loss: ${trailing_stop:.2f}")
+                    else:
+                        position = None
+                        trailing_stop = None
             
-            # Position management
+            # Position management - now using shorter MA for trend exit
             elif position is not None:
-                # First check if stop was hit
+                # Check stops
                 if current_low <= trailing_stop:
                     exit_price = trailing_stop
                     profit = (exit_price - position) * position_size
                     profit_percentage = (exit_price - position) / position * 100
                     total_profit += profit
-                    self.capital += profit  # Update capital
+                    self.capital += profit
                     
                     print(f"\nSell {symbol} (Trailing Stop):")
                     print(f"Exit Price: ${exit_price:.2f}")
@@ -119,23 +150,22 @@ class Backtester:
                     highest_price = None
                     continue
                 
-                # Update highest price and trailing stop
+                # Update trailing stops
                 if current_high > highest_price:
                     highest_price = current_high
-                    # Update trailing stop to lock in profits
-                    if current_high >= position * 1.03:  # Up 3%
+                    if current_high >= position * 1.03:
                         trailing_stop = max(position, trailing_stop)
-                    if current_high >= position * 1.05:  # Up 5%
+                    if current_high >= position * 1.05:
                         trailing_stop = max(current_high * 0.97, trailing_stop)
-                    if current_high >= position * 1.10:  # Up 10%
+                    if current_high >= position * 1.10:
                         trailing_stop = max(current_high * 0.95, trailing_stop)
                 
-                # Check trend exit
-                if current_price < current_ma50:
+                # Trend exit now uses 20 MA instead of 50 MA
+                if current_price < current_ma20:  # Changed from MA_50 to MA_20
                     profit = (current_price - position) * position_size
                     profit_percentage = (current_price - position) / position * 100
                     total_profit += profit
-                    self.capital += profit  # Update capital
+                    self.capital += profit
                     
                     print(f"\nSell {symbol} (Trend Exit):")
                     print(f"Exit Price: ${current_price:.2f}")
@@ -155,12 +185,10 @@ class Backtester:
         }
     
     def run(self, symbols: List[str], start_date: str, end_date: str):
-        """Run backtest for multiple symbols with comprehensive summary"""
+        """Run backtest for multiple symbols"""
         results = []
         total_profit = 0
         total_trades = 0
-        winning_trades = 0
-        losing_trades = 0
         
         print("\nRunning backtest...")
         print(f"Initial Capital: ${self.initial_capital:,.2f}")

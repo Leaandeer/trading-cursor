@@ -1,6 +1,0 @@
-2025-02-25 09:51:57,190 - INFO - Starting with account balance: $996.51
-2025-02-25 09:51:57,190 - INFO - Trading Bot gestartet
-2025-02-25 09:59:55,458 - INFO - Starting with account balance: $996.51
-2025-02-25 09:59:55,459 - INFO - Starting trading bot...
-2025-02-25 10:06:56,760 - INFO - Starting with account balance: $993.88
-2025-02-25 10:06:56,761 - INFO - Starting trading bot...

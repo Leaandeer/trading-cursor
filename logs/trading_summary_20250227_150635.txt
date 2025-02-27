@@ -1,0 +1,20 @@
+Trading Summary - 2025-02-27
+====================================
+
+Account Summary:
+---------------
+Equity: $946.10
+Cash: $114.88
+Buying Power: $114.88
+Today's P&L: $9.26 (0.99%)
+
+No trades executed today
+
+Open Positions:
+---------------
+AAPL: 1 shares, Entry: $242.00, Current: $239.22, P&L: $-2.78 (-1.1%)
+TSLA: 2 shares, Entry: $307.24, Current: $296.00, P&L: $-22.48 (-3.7%)
+
+====================================
+Generated at: 09:08:08 EST
+====================================
